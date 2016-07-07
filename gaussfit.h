@@ -5,11 +5,13 @@
 //  Copyright (c) 2014 aosinnov. All rights reserved.
 //
 
-#ifndef __wavscore__gaussfit__
-#define __wavscore__gaussfit__
+#ifndef __kdegauss__gaussfit__
+#define __kdegauss__gaussfit__
+
+#include <vector>
 
 using namespace std;
 
-void gaussfit (vector<double>&, double&, double&, double&, double&);
+void gaussfit(vector<double>&, vector<double>&, double&, double&, double&, double&);
 
-#endif /* defined(__wavscore__gaussfit__) */
+#endif

@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <iostream>
 #include <stdio.h>
-#include <gsl/gsl_rng.h>
+// #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
 #include <gsl/gsl_vector.h>
 #include <gsl/gsl_blas.h>
@@ -10,14 +10,16 @@
 #include <queue>
 #include <algorithm>
 #include <cmath>
-#include "wavproc.hpp"
+#include "plot.h"
 
 using namespace std;
+
 
 /* expfit.c -- model functions for exponential + background */
 
 struct data {
   size_t n;
+  double * x;
   double * y;
 };
 
@@ -25,6 +27,7 @@ struct data {
 int expb_f (const gsl_vector * x, void *data, gsl_vector * f)
 {
   size_t n = ((struct data *)data)->n;
+  double *xPos = ((struct data *)data)->x;
   double *y = ((struct data *)data)->y;
   
   double A = gsl_vector_get (x, 0);
@@ -37,7 +40,7 @@ int expb_f (const gsl_vector * x, void *data, gsl_vector * f)
   for (i = 0; i < n; i++)
     {
       /* Model Yi = A * exp(-lambda * i) + b */
-      double t = i;
+      double t = xPos[i];
       double Yi = A * exp (-pow(t-mu,2)/(2*sig*sig)) + y0;
       //Add penalization factor here to keep peak positive
       if(A>0)
@@ -52,6 +55,7 @@ int expb_f (const gsl_vector * x, void *data, gsl_vector * f)
 int expb_df (const gsl_vector * x, void *data, gsl_matrix * J)
 {
   size_t n = ((struct data *)data)->n;
+  double *xPos = ((struct data *)data)->x;
   double A = gsl_vector_get (x, 0);
   double mu = gsl_vector_get (x, 1);
   double sig = gsl_vector_get (x, 2);
@@ -64,7 +68,7 @@ int expb_df (const gsl_vector * x, void *data, gsl_matrix * J)
       /* where fi = (Yi - yi)/sigma[i],      */
       /*       Yi = A * exp(-lambda * i) + b  */
       /* and the xj are the parameters (A,lambda,b) */
-      double t = i;
+      double t = xPos[i];
       double e = exp(-pow(t-mu,2)/(2*sig*sig));
       gsl_matrix_set (J, i, 0, e); 
       gsl_matrix_set (J, i, 1, e*A*(t-mu)/(sig*sig));
@@ -79,18 +83,17 @@ int expb_fdf (const gsl_vector * x, void *data, gsl_vector * f, gsl_matrix * J)
 {
   expb_f (x, data, f);
   expb_df (x, data, J);
-
   return GSL_SUCCESS;
 }
 
 bool distfn(std::pair<double, int> i, std::pair<double, int> j) { return i.first<j.first; }
 
 // Take top 5 highest value, remove the one that's farthest from the mean, and then return the average x,y of the remaining 4
-void getinit(vector<double> &y, double &maxVal, double &index){
+void getinit(vector<double> &x, vector<double> &y, double &maxVal, double &x_maxVal){
   std::priority_queue<std::pair<double, int> > q;
   std::vector<std::pair<double, int> > v;
   for (int i = 0; i < int(y.size()); ++i) {
-    q.push(std::pair<double, int>(y[i], i));
+    q.push(std::pair<double, int>(y[i], x[i]));
   }
   int k = 5; // number of indices we need
   double mean = 0;
@@ -105,39 +108,46 @@ void getinit(vector<double> &y, double &maxVal, double &index){
   }
   v.erase(std::max_element(v.begin(),v.end(),distfn));
   maxVal = 0;
-  index = 0;
+  x_maxVal = 0;
   for (int i = 0; i < k-1; ++i) {
-    index = index + v[i].second;
-    maxVal = maxVal + y[v[i].second];
+    x_maxVal += v[i].second;
+    maxVal += y[v[i].second];
   }
-  index = index/(k-1);
+  x_maxVal = x_maxVal/(k-1);
   maxVal = maxVal/(k-1);
 }
 
-void gaussfit (vector<double> &y2, double &A, double &mu, double &sig, double &y0){
+void gaussfit (vector<double> &x, vector<double> &y, double &A, double &mu, double &sig, double &y0){
+  uint N = 250;
+  double FIT_RATIO = 1;
+  double FIT_OFFSET = 0;
+
   double maxVal;
-  double index;
-  double sig_init = 250.0/FIT_RATIO;
-  getinit(y2, maxVal, index);
-  double x_init[4] = {maxVal, index, sig_init, 0.0};
+  double x_maxVal;
+  double sig_init = 5;
+  getinit(x, y, maxVal, x_maxVal);
+  double x_init[4] = {maxVal, x_maxVal, sig_init, 0.0};
   
   const gsl_multifit_fdfsolver_type *T;
   gsl_multifit_fdfsolver *s;
   int status;
-  unsigned int iter = 0;  
+  unsigned int iter = 0;
   const size_t n = N;
+
+  // Number of variables
   const size_t p = 4;
 
-  struct data d = { n, &y2[0]};
+  struct data d = {n,  &x[0], &y[0]};
   gsl_multifit_function_fdf f;
-  gsl_vector_view x = gsl_vector_view_array (x_init, p);
-  const gsl_rng_type * type;
-  gsl_rng * r;
+  gsl_vector_view xOrig = gsl_vector_view_array (x_init, p);
+  // const gsl_rng_type * type;
+  // gsl_rng * r;
 
   gsl_rng_env_setup();
 
-  type = gsl_rng_default;
-  r = gsl_rng_alloc (type);
+  // Random number generator
+  // type = gsl_rng_default;
+  // r = gsl_rng_alloc (type);
 
   f.f = &expb_f;
   f.df = &expb_df;
@@ -146,11 +156,14 @@ void gaussfit (vector<double> &y2, double &A, double &mu, double &sig, double &y
   f.p = p;
   f.params = &d;
 
-  /* This is the data to be fitted */
-
+  // Set T to the Levenberg–Marquardt derivative solver
   T = gsl_multifit_fdfsolver_lmsder;
+
+  // Allocate new instance of LM derivative solver
   s = gsl_multifit_fdfsolver_alloc (T, n, p);
-  gsl_multifit_fdfsolver_set (s, &f, &x.vector);
+
+  // Initialize solver with function f and initial vector x
+  gsl_multifit_fdfsolver_set (s, &f, &xOrig.vector);
   
   do
     {
@@ -168,6 +181,7 @@ void gaussfit (vector<double> &y2, double &A, double &mu, double &sig, double &y
   sig=FIT(2)*FIT_RATIO;
   y0=FIT(3);
 
+  // free all the memory associated with the solver s.
   gsl_multifit_fdfsolver_free (s);
-  gsl_rng_free (r);
+  // gsl_rng_free (r);
 }
